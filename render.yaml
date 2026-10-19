@@ -1,0 +1,15 @@
+services:
+  - type: web
+    name: runner-game
+    runtime: node
+    plan: free
+    buildCommand: npm ci --include=dev && npm run build
+    startCommand: npm start
+    healthCheckPath: /
+    envVars:
+      - key: NODE_VERSION
+        value: 22.21.0
+      - key: NODE_ENV
+        value: production
+      - key: VITE_AUTH_ENABLED
+        value: "false"

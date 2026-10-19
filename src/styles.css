@@ -1,0 +1,80 @@
+@import "tailwindcss";
+
+@theme {
+  --color-bg: #100e0c;
+  --color-surface: #1c1814;
+  --color-fg: #f4efe4;
+  --color-muted: #a39888;
+  --color-primary: #e4572e;
+  --color-accent: #e7c36a;
+  --color-border: #3a322a;
+  --font-sans: "Noto Sans SC", "WenQuanYi Zen Hei", ui-sans-serif, system-ui, sans-serif;
+  --font-display: "Noto Serif SC", "WenQuanYi Zen Hei", ui-serif, serif;
+  --radius: 0.25rem;
+}
+
+@layer base {
+  html,
+  body {
+    margin: 0;
+    background: var(--color-bg);
+    color: var(--color-fg);
+  }
+
+  button:not(:disabled),
+  [role="button"]:not(:disabled) {
+    cursor: pointer;
+  }
+}
+
+.panel {
+  background: color-mix(in srgb, var(--color-surface) 92%, transparent);
+  border: 1px solid var(--color-border);
+}
+
+.game-root {
+  -webkit-tap-highlight-color: transparent;
+  user-select: none;
+}
+
+.dock {
+  padding-bottom: max(0.75rem, env(safe-area-inset-bottom));
+}
+
+.sheet-in {
+  animation: sheet-in 220ms ease-out;
+}
+
+.combo-pop {
+  animation: combo-pop 180ms ease-out;
+}
+
+@keyframes sheet-in {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes combo-pop {
+  0% {
+    transform: scale(0.86);
+  }
+  55% {
+    transform: scale(1.06);
+  }
+  100% {
+    transform: scale(1);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .sheet-in,
+  .combo-pop {
+    animation: none;
+  }
+}

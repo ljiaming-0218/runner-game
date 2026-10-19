@@ -1,0 +1,13 @@
+node_modules/
+.output/
+.vercel/
+.tanstack/
+.grok/
+.env
+.env.*
+!.env.example
+screenshots/
+artifacts/
+.node_modules.lock
+.playwright-cli/
+*.log
