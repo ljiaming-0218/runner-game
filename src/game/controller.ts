@@ -1,6 +1,7 @@
+import { type LevelId, type CharacterId } from "./content";
 import { Sfx } from "./audio";
 import { drawFrame } from "./draw";
-import { loadSave, writeSave } from "./save";
+import { loadSave, writeSave, recordRun, type RunRecord } from "./save";
 import {
   STEP,
   applyView,
@@ -26,9 +27,21 @@ export interface Hud {
   paused: boolean;
   speedT: number;
   recording: boolean;
+  level: LevelId;
+  character: CharacterId;
+  cleared: boolean;
+  coins: number;
+  shield: number;
+  magnet: number;
+  double: number;
+  records: RunRecord[];
 }
 
 type Probe = {
+  y: number;
+  onGround: boolean;
+  sliding: boolean;
+  shield: number;
   phase: Phase;
   score: number;
   distance: number;
@@ -62,6 +75,11 @@ export class GameController {
   private pointerId: number | null = null;
   private pointerY = 0;
   private converted = false;
+  private runId = "";
+  private records: RunRecord[] = [];
+  private pointerTime = 0;
+  private pointerTimer: ReturnType<typeof setTimeout> | null = null;
+  private pointerJumped = false;
 
   constructor(canvas: HTMLCanvasElement, onHud: (hud: Hud) => void) {
     const ctx = canvas.getContext("2d");
@@ -72,6 +90,9 @@ export class GameController {
     const saved = loadSave();
     this.state = createRun(saved);
     this.sfx.muted = saved.muted;
+    this.state.level = saved.level;
+    this.state.character = saved.character;
+    this.records = saved.runs;
     this.reduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
   }
 
@@ -79,7 +100,7 @@ export class GameController {
     this.last = performance.now();
     window.addEventListener("keydown", this.onKeyDown);
     window.addEventListener("keyup", this.onKeyUp);
-    window.addEventListener("blur", this.onBlur);
+    window.addEventListener("blur", this.onWindowBlur);
     document.addEventListener("visibilitychange", this.onHide);
     this.canvas.addEventListener("pointerdown", this.onPointerDown);
     this.canvas.addEventListener("pointermove", this.onPointerMove);
@@ -89,6 +110,10 @@ export class GameController {
     this.emit(true);
     this.raf = requestAnimationFrame(this.frame);
     const probe: Probe = {
+      y: this.state.player.y,
+      onGround: true,
+      sliding: false,
+      shield: 0,
       phase: this.state.phase,
       score: 0,
       distance: 0,
@@ -100,6 +125,10 @@ export class GameController {
       kill: () => this.kill(),
     };
     Object.defineProperties(probe, {
+      y: { get: () => this.state.player.y },
+      onGround: { get: () => this.state.player.onGround },
+      sliding: { get: () => this.state.player.sliding },
+      shield: { get: () => this.state.shield },
       phase: { get: () => this.state.phase },
       score: { get: () => Math.floor(this.state.score) },
       distance: { get: () => this.state.distance },
@@ -111,10 +140,11 @@ export class GameController {
 
   destroy() {
     this.stopped = true;
+    this.onBlur();
     cancelAnimationFrame(this.raf);
     window.removeEventListener("keydown", this.onKeyDown);
     window.removeEventListener("keyup", this.onKeyUp);
-    window.removeEventListener("blur", this.onBlur);
+    window.removeEventListener("blur", this.onWindowBlur);
     document.removeEventListener("visibilitychange", this.onHide);
     this.canvas.removeEventListener("pointerdown", this.onPointerDown);
     this.canvas.removeEventListener("pointermove", this.onPointerMove);
@@ -122,14 +152,47 @@ export class GameController {
     this.canvas.removeEventListener("pointercancel", this.onPointerUp);
     const w = window as unknown as { __runner?: Probe };
     if (w.__runner) delete w.__runner;
+    this.sfx.destroy();
   }
 
   begin() {
     this.sfx.unlock();
     this.paused = false;
     this.acc = 0;
+    this.runId = crypto.randomUUID();
+    this.onBlur();
     beginRun(this.state);
     this.resize();
+    this.emit(true);
+  }
+
+  configure(level: LevelId, character: CharacterId) {
+    if (this.state.phase === "play" || this.state.phase === "dead") return;
+    this.state.level = level;
+    this.state.character = character;
+    writeSave({ level, character });
+    this.sfx.unlock();
+    this.sfx.ui();
+    this.emit(true);
+  }
+
+  togglePause() {
+    if (this.state.phase !== "play") return;
+    this.paused = !this.paused;
+    this.onBlur();
+    this.emit(true);
+  }
+
+  menu() {
+    this.onBlur();
+    this.paused = false;
+    this.state.phase = "menu";
+    this.state.entities.forEach((e) => {
+      e.active = false;
+    });
+    this.state.player.tumble = 0;
+    this.state.score = 0;
+    this.state.distance = 0;
     this.emit(true);
   }
 
@@ -245,7 +308,9 @@ export class GameController {
       else if (event === "coin") this.sfx.coin(this.state.combo);
       else if (event === "near") this.sfx.near();
       else if (event === "hit") this.sfx.hit();
-      else if (event === "over") this.emit(true);
+      else if (event === "power") this.sfx.power();
+      else if (event === "shield-break") this.sfx.shield();
+      else if (event === "clear") this.sfx.clear();
     }
     this.state.events.length = 0;
     if (this.state.needsSave) {
@@ -255,6 +320,18 @@ export class GameController {
         bestCombo: this.state.bestCombo,
         muted: this.sfx.muted,
       });
+      const saved = recordRun({
+        id: this.runId,
+        name: loadSave().name,
+        score: Math.floor(this.state.score),
+        distance: Math.floor(this.state.distance / 48),
+        combo: this.state.maxCombo,
+        level: this.state.level,
+        character: this.state.character,
+        cleared: this.state.cleared,
+        date: new Date().toISOString(),
+      });
+      this.records = saved.runs;
       this.state.needsSave = false;
       this.emit(true);
     }
@@ -282,6 +359,14 @@ export class GameController {
       paused: this.paused,
       speedT: this.state.speedT,
       recording: this.state.phase === "play" && score > this.state.best,
+      level: this.state.level,
+      character: this.state.character,
+      cleared: this.state.cleared,
+      coins: this.state.coins,
+      shield: this.state.shield,
+      magnet: this.state.magnet,
+      double: this.state.double,
+      records: this.records,
     });
   }
 
@@ -315,7 +400,14 @@ export class GameController {
   }
 
   private onKeyDown = (event: KeyboardEvent) => {
-    if (event.repeat) return;
+    if (
+      event.repeat ||
+      (event.target instanceof HTMLElement && event.target.closest("input, textarea, select")) ||
+      (event.code === "Space" &&
+        event.target instanceof HTMLElement &&
+        !!event.target.closest("button"))
+    )
+      return;
     const jump = event.code === "Space" || event.code === "ArrowUp" || event.code === "KeyW";
     const slide = event.code === "ArrowDown" || event.code === "KeyS";
     if (!jump && !slide && event.code !== "KeyM" && event.code !== "Escape") return;
@@ -326,8 +418,7 @@ export class GameController {
       return;
     }
     if (event.code === "Escape" && this.state.phase === "play") {
-      this.paused = !this.paused;
-      this.emit(true);
+      this.togglePause();
       return;
     }
     if (this.state.phase === "menu" || this.state.phase === "over") {
@@ -350,19 +441,31 @@ export class GameController {
   };
 
   private onKeyUp = (event: KeyboardEvent) => {
-    if (event.code === "Space" || event.code === "ArrowUp" || event.code === "KeyW") this.jumpDown = false;
+    if (event.code === "Space" || event.code === "ArrowUp" || event.code === "KeyW")
+      this.jumpDown = false;
     if (event.code === "ArrowDown" || event.code === "KeyS") this.slideDown = false;
   };
 
   private onBlur = () => {
+    if (this.pointerTimer) clearTimeout(this.pointerTimer);
+    this.pointerTimer = null;
+    this.pointerId = null;
     this.jumpDown = false;
     this.slideDown = false;
     this.jumpEdge = false;
     this.slideEdge = false;
   };
 
+  private onWindowBlur = () => {
+    this.onBlur();
+    if (this.state.phase === "play") {
+      this.paused = true;
+      this.emit(true);
+    }
+  };
+
   private onHide = () => {
-    this.sfx.resume();
+    if (!document.hidden) this.sfx.resume();
     if (document.hidden && this.state.phase === "play") {
       this.paused = true;
       this.onBlur();
@@ -386,23 +489,52 @@ export class GameController {
     this.pointerY = event.clientY;
     this.converted = false;
     this.canvas.setPointerCapture(event.pointerId);
-    this.jumpEdge = true;
-    this.jumpDown = true;
+    this.pointerTime = performance.now();
+    this.pointerJumped = false;
+    if (event.pointerType !== "mouse")
+      this.pointerTimer = setTimeout(() => {
+        if (this.pointerId === event.pointerId && !this.converted) {
+          this.jumpEdge = true;
+          this.jumpDown = true;
+          this.pointerJumped = true;
+        }
+      }, 110);
+    if (event.pointerType === "mouse") {
+      this.jumpEdge = true;
+      this.jumpDown = true;
+    }
   };
 
   private onPointerMove = (event: PointerEvent) => {
     if (this.pointerId !== event.pointerId || this.converted) return;
-    if (event.clientY - this.pointerY > 42) {
+    const delta = event.clientY - this.pointerY;
+    if (Math.abs(delta) > 26) {
       this.converted = true;
-      this.jumpDown = false;
-      tryConvertToSlide(this.state);
-      this.slideEdge = true;
-      this.slideDown = true;
+      if (this.pointerTimer) clearTimeout(this.pointerTimer);
+      if (delta > 0) {
+        this.jumpDown = false;
+        tryConvertToSlide(this.state);
+        this.slideEdge = true;
+        this.slideDown = true;
+      } else {
+        this.jumpEdge = true;
+        this.jumpDown = true;
+      }
     }
   };
 
   private onPointerUp = (event: PointerEvent) => {
     if (this.pointerId !== event.pointerId) return;
+    if (this.pointerTimer) clearTimeout(this.pointerTimer);
+    if (
+      event.type !== "pointercancel" &&
+      event.pointerType !== "mouse" &&
+      !this.converted &&
+      !this.pointerJumped &&
+      performance.now() - this.pointerTime < 450
+    ) {
+      this.jumpEdge = true;
+    }
     this.pointerId = null;
     this.jumpDown = false;
     this.slideDown = false;

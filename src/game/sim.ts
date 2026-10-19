@@ -1,9 +1,17 @@
+import {
+  getLevel,
+  type LevelId,
+  type CharacterId,
+  type PowerKind,
+  POWER_LABELS,
+} from "./content.ts";
+
 export const VIEW_W = 960;
 export const STEP = 1 / 60;
 export const GROUND_PAD = 118;
 
 export type Phase = "menu" | "play" | "dead" | "over";
-export type HazardKind = "crate" | "tall" | "banner" | "gap" | "coin";
+export type HazardKind = "crate" | "tall" | "banner" | "gap" | "coin" | PowerKind;
 
 export interface Input {
   jumpPressed: boolean;
@@ -49,6 +57,15 @@ export interface Floater {
 
 export interface RunState {
   phase: Phase;
+  level: LevelId;
+  character: CharacterId;
+  cleared: boolean;
+  coins: number;
+  shield: number;
+  magnet: number;
+  double: number;
+  invincible: number;
+  nextPower: number;
   time: number;
   distance: number;
   speed: number;
@@ -189,6 +206,15 @@ export function createRun(saved?: {
   const ground = viewH - GROUND_PAD;
   const state: RunState = {
     phase: "menu",
+    level: "lantern",
+    character: "chilan",
+    cleared: false,
+    coins: 0,
+    shield: 0,
+    magnet: 0,
+    double: 0,
+    invincible: 0,
+    nextPower: 2,
     time: 0,
     distance: 0,
     speed: 390,
@@ -294,7 +320,11 @@ export function resetRun(state: RunState) {
     bestCombo: state.bestCombo,
   };
   const viewH = state.viewH;
+  const level = state.level;
+  const character = state.character;
   const fresh = createRun(saved);
+  fresh.level = level;
+  fresh.character = character;
   fresh.viewH = viewH;
   fresh.ground = viewH - GROUND_PAD;
   fresh.player.y = fresh.ground;
@@ -310,6 +340,8 @@ export function resetRun(state: RunState) {
 export function beginRun(state: RunState) {
   resetRun(state);
   state.phase = "play";
+  state.speed = speedOf(getLevel(state.level).difficulty * 15000);
+  if (state.character === "jinmo") state.shield = 1;
 }
 
 function alloc(state: RunState) {
@@ -319,14 +351,7 @@ function alloc(state: RunState) {
   return null;
 }
 
-function place(
-  state: RunState,
-  kind: HazardKind,
-  x: number,
-  y: number,
-  w: number,
-  h: number,
-) {
+function place(state: RunState, kind: HazardKind, x: number, y: number, w: number, h: number) {
   const e = alloc(state);
   if (!e) return;
   e.active = true;
@@ -484,14 +509,7 @@ const PATTERNS: Pattern[] = [
       const h = 56;
       const w = placeCrate(state, x0, h, "crate");
       for (let i = 0; i < 3; i++) {
-        place(
-          state,
-          "coin",
-          x0 + w / 2 + (i - 1) * 32,
-          state.ground - h - 42,
-          18,
-          18,
-        );
+        place(state, "coin", x0 + w / 2 + (i - 1) * 32, state.ground - h - 42, 18, 18);
       }
       placeBanner(state, x0 + 1.1 * speed, speed);
     },
@@ -531,9 +549,15 @@ function spawnPass(state: RunState) {
   const horizon = state.viewW + state.speed * 1.2;
   let guard = 0;
   while (state.spawnX < horizon && guard < 8) {
-    const t = difficultyOf(state.distance);
+    const t = Math.min(1, difficultyOf(state.distance) + getLevel(state.level).difficulty);
     const pattern = pickPattern(state, t);
     pattern.apply(state, state.spawnX, state.speed);
+    if (state.spawns >= state.nextPower) {
+      const kinds: PowerKind[] = ["shield", "magnet", "double"];
+      const kind = kinds[Math.floor(rand(state) * kinds.length)]!;
+      place(state, kind, state.spawnX + state.speed * 0.7, state.ground - 66, 28, 28);
+      state.nextPower = state.spawns + 3 + Math.floor(rand(state) * 2);
+    }
     state.spawnX += pattern.span(t) * state.speed;
     state.lastPattern = pattern.id;
     state.lastClose = pattern.close;
@@ -558,7 +582,11 @@ function playerBox(state: RunState) {
   return { x: p.x - 16, y: p.y - 70, w: 34, h: 68 };
 }
 
-function intersects(a: { x: number; y: number; w: number; h: number }, b: { x: number; y: number; w: number; h: number }, inset: number) {
+function intersects(
+  a: { x: number; y: number; w: number; h: number },
+  b: { x: number; y: number; w: number; h: number },
+  inset: number,
+) {
   return (
     a.x + inset < b.x + b.w &&
     a.x + a.w - inset > b.x &&
@@ -570,12 +598,35 @@ function intersects(a: { x: number; y: number; w: number; h: number }, b: { x: n
 function addCombo(state: RunState, n: number) {
   state.combo += n;
   if (state.combo > state.maxCombo) state.maxCombo = state.combo;
-  state.comboTime = 2.55;
+  state.comboTime = state.character === "chilan" ? 3.5 : 2.55;
   state.mult = Math.min(8, 1 + Math.floor(state.combo / 5));
 }
 
 function die(state: RunState, reason: "hit" | "fall", note: string) {
   if (state.phase !== "play") return;
+  if (state.invincible > 0 || state.shield > 0) {
+    if (state.invincible <= 0) {
+      state.shield = 0;
+      state.invincible = 1.5;
+      emit(state, "shield-break");
+    }
+    if (reason === "fall") {
+      state.player.y = state.ground - 120;
+      state.player.vy = -550;
+      state.player.onGround = false;
+    }
+    for (const e of state.entities) {
+      if (
+        e.active &&
+        e.x < state.player.x + 100 &&
+        e.x + e.w > state.player.x - 80 &&
+        e.kind !== "coin"
+      )
+        e.active = false;
+    }
+    burst(state, state.player.x, state.player.y - 40, "spark", 16, 210);
+    return;
+  }
   state.phase = "dead";
   state.deadReason = reason;
   state.note = note;
@@ -720,9 +771,7 @@ export function step(state: RunState, input: Input, dt: number) {
     if (p.slideTime <= 0 && !blocked) p.sliding = false;
   }
 
-  const groundedNow =
-    p.onGround &&
-    (supportedAt(state, p.x - 12) || supportedAt(state, p.x + 10));
+  const groundedNow = p.onGround && (supportedAt(state, p.x - 12) || supportedAt(state, p.x + 10));
   if (p.onGround && !groundedNow) {
     p.onGround = false;
     p.coyote = COYOTE;
@@ -734,7 +783,7 @@ export function step(state: RunState, input: Input, dt: number) {
     p.sliding = false;
     p.onGround = false;
     p.coyote = 0;
-    p.vy = JUMP_V;
+    p.vy = JUMP_V * (state.character === "qingyu" ? 1.1 : 1);
     p.jumpCut = false;
     p.airTime = 0;
     p.squashX = 0.84;
@@ -797,8 +846,11 @@ export function step(state: RunState, input: Input, dt: number) {
     } else if (pulse < 0.15) state.dustGate = false;
   }
 
-  state.speedT = difficultyOf(state.distance);
-  state.speed = speedOf(state.distance);
+  state.magnet = Math.max(0, state.magnet - dt);
+  state.double = Math.max(0, state.double - dt);
+  state.invincible = Math.max(0, state.invincible - dt);
+  state.speedT = Math.min(1, difficultyOf(state.distance) + getLevel(state.level).difficulty);
+  state.speed = speedOf(state.speedT * 15000);
 
   for (const e of state.entities) {
     if (!e.active) continue;
@@ -815,21 +867,28 @@ export function step(state: RunState, input: Input, dt: number) {
   state.spawnX -= state.speed * dt;
   state.scroll += state.speed * dt;
   state.distance += state.speed * dt;
-  state.score += state.speed * dt * 0.055 * state.mult;
+  state.score += state.speed * dt * 0.055 * state.mult * (state.double > 0 ? 2 : 1);
 
+  if (state.distance >= getLevel(state.level).target * 48) {
+    state.distance = getLevel(state.level).target * 48;
+    state.cleared = true;
+    state.score += 500 + getLevel(state.level).target * 2;
+    finish(state);
+    emit(state, "clear");
+    return;
+  }
   spawnPass(state);
 
   if (state.phase !== "play") return;
 
   const box = playerBox(state);
   for (const e of state.entities) {
-    if (!e.active || e.kind === "coin" || e.kind === "gap") continue;
+    if (!e.active || e.kind === "coin" || e.kind === "gap" || isPower(e.kind)) continue;
     const sweptW = e.w + Math.max(0, e.prevX - e.x);
     const solid = { x: e.x, y: e.y, w: sweptW, h: e.h };
     const hit = intersects(box, solid, 5);
     if (!hit) {
-      const xOverlap =
-        box.x < solid.x + solid.w && box.x + box.w > solid.x;
+      const xOverlap = box.x < solid.x + solid.w && box.x + box.w > solid.x;
       if (xOverlap && (e.kind === "crate" || e.kind === "tall")) {
         const clearance = e.y - p.y;
         if (clearance >= -2 && clearance < 18) e.near = true;
@@ -851,12 +910,22 @@ export function step(state: RunState, input: Input, dt: number) {
   }
 
   for (const e of state.entities) {
-    if (!e.active || e.kind !== "coin") continue;
+    if (!e.active || (e.kind !== "coin" && !isPower(e.kind))) continue;
+    if (e.kind === "coin" && state.magnet > 0 && Math.hypot(e.x - p.x, e.y - (p.y - 40)) < 240) {
+      const follow = Math.min(1, dt * 12);
+      e.x += (p.x - e.x) * follow;
+      e.y += (p.y - 40 - e.y) * follow;
+    }
     const coin = { x: e.x, y: e.y, w: e.w, h: e.h };
     if (!intersects(box, coin, -4)) continue;
     e.active = false;
+    if (isPower(e.kind)) {
+      collectPower(state, e.kind);
+      continue;
+    }
+    state.coins += 1;
     addCombo(state, 1);
-    const gain = Math.floor(25 * state.mult);
+    const gain = Math.floor(25 * state.mult * (state.double > 0 ? 2 : 1));
     state.score += gain;
     emit(state, "coin");
     floatText(state, e.x, e.y - 8, `+${gain}`, true);
@@ -864,11 +933,11 @@ export function step(state: RunState, input: Input, dt: number) {
   }
 
   for (const e of state.entities) {
-    if (!e.active || e.scored || e.kind === "coin") continue;
+    if (!e.active || e.scored || e.kind === "coin" || isPower(e.kind)) continue;
     if (e.x + e.w >= p.x - 6) continue;
     e.scored = true;
     addCombo(state, 1);
-    const bonus = Math.floor((e.near ? 40 : 12) * state.mult);
+    const bonus = Math.floor((e.near ? 40 : 12) * state.mult * (state.double > 0 ? 2 : 1));
     state.score += bonus;
     if (e.near) {
       emit(state, "near");
@@ -895,3 +964,14 @@ export const EMPTY_INPUT: Input = {
   slidePressed: false,
   slideDown: false,
 };
+
+export function isPower(kind: HazardKind): kind is PowerKind {
+  return kind === "shield" || kind === "magnet" || kind === "double";
+}
+export function collectPower(state: RunState, kind: PowerKind) {
+  if (kind === "shield") state.shield = 1;
+  else state[kind] = 8;
+  emit(state, "power");
+  floatText(state, state.player.x + 20, state.player.y - 110, POWER_LABELS[kind], true);
+  burst(state, state.player.x, state.player.y - 40, "spark", 14, 160);
+}

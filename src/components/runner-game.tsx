@@ -1,6 +1,30 @@
-import { ArrowDown, Play, RotateCcw, Volume2, VolumeX } from "lucide-react";
+import {
+  ArrowDown,
+  ArrowUp,
+  Check,
+  ChevronRight,
+  Flag,
+  Magnet,
+  Pause,
+  Play,
+  RotateCcw,
+  Shield,
+  Sparkles,
+  Trophy,
+  Volume2,
+  VolumeX,
+} from "lucide-react";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { GameController, type Hud } from "@/game/controller";
+import {
+  CHARACTERS,
+  LEVELS,
+  getCharacter,
+  getLevel,
+  type CharacterId,
+  type LevelId,
+} from "@/game/content";
+import { loadSave, writeSave, type RunRecord } from "@/game/save";
 
 const INITIAL: Hud = {
   phase: "menu",
@@ -15,202 +39,424 @@ const INITIAL: Hud = {
   paused: false,
   speedT: 0,
   recording: false,
+  level: "lantern",
+  character: "chilan",
+  cleared: false,
+  coins: 0,
+  shield: 0,
+  magnet: 0,
+  double: 0,
+  records: [],
 };
-
-function formatScore(value: number) {
-  return new Intl.NumberFormat("zh-CN").format(value);
-}
+const number = new Intl.NumberFormat("zh-CN");
+type Tab = "levels" | "characters" | "leaderboard";
+const TABS: { id: Tab; name: string }[] = [
+  { id: "levels", name: "关卡" },
+  { id: "characters", name: "角色" },
+  { id: "leaderboard", name: "排行" },
+];
 
 export function RunnerGame() {
-  const canvasRef = useRef<HTMLCanvasElement>(null);
-  const gameRef = useRef<GameController | null>(null);
+  const canvas = useRef<HTMLCanvasElement>(null);
+  const controller = useRef<GameController | null>(null);
   const [hud, setHud] = useState<Hud>(INITIAL);
-
+  const [tab, setTab] = useState<Tab>("levels");
+  const [name, setName] = useState("夜行客");
   useEffect(() => {
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-    const game = new GameController(canvas, setHud);
-    gameRef.current = game;
+    if (!canvas.current) return;
+    const game = new GameController(canvas.current, setHud);
+    controller.current = game;
+    setName(loadSave().name);
     game.start();
     return () => {
       game.destroy();
-      gameRef.current = null;
+      controller.current = null;
     };
   }, []);
-
-  const filled = Math.round(hud.speedT * 5);
-
+  const level = getLevel(hud.level);
+  const character = getCharacter(hud.character);
+  const inMenu = hud.phase === "menu";
+  const playing = hud.phase === "play";
+  const configure = (levelId: LevelId, characterId: CharacterId) =>
+    controller.current?.configure(levelId, characterId);
   return (
-    <div className="game-root relative h-dvh w-full overflow-hidden bg-bg text-fg">
-      <canvas ref={canvasRef} className="absolute inset-0 h-full w-full touch-none" />
+    <div className={`game-root theme-${hud.level} ${inMenu ? "is-menu" : ""}`}>
+      <canvas ref={canvas} className="game-canvas" aria-label="屋脊跑酷游戏画面" />
+      <header className="topbar">
+        <button
+          className="seal"
+          aria-label={inMenu ? "赤岚主页" : "打开暂停菜单"}
+          onClick={() => {
+            if (inMenu) return;
+            controller.current?.togglePause();
+          }}
+        >
+          赤<span>岚</span>
+        </button>
+        {inMenu ? (
+          <span className="topbar-note">长夜漫漫，步履不停。</span>
+        ) : (
+          <div className="scoreboard">
+            <span>
+              分数 <strong>{number.format(hud.score)}</strong>
+            </span>
+            <span className="secondary-stat">
+              最高 <b>{number.format(hud.best)}</b>
+            </span>
+          </div>
+        )}
+        <div className="top-actions">
+          <button
+            className="icon-button"
+            aria-label={hud.muted ? "打开声音" : "关闭声音"}
+            title="声音 · M"
+            onClick={() => controller.current?.toggleMute()}
+          >
+            {hud.muted ? <VolumeX /> : <Volume2 />}
+          </button>
+          <button
+            className="icon-button"
+            aria-label={inMenu ? "查看排行榜" : "暂停游戏"}
+            onClick={() => (inMenu ? setTab("leaderboard") : controller.current?.togglePause())}
+          >
+            {inMenu ? <Trophy /> : <Pause />}
+          </button>
+        </div>
+      </header>
 
-      <div className="pointer-events-none absolute inset-0 flex flex-col">
-        <header className="flex items-start justify-between gap-3 px-4 pt-4">
-          <div>
-            <p className="font-sans text-xs tracking-widest text-muted">分数</p>
-            <p className="font-display text-2xl leading-none text-fg md:text-3xl">{formatScore(hud.score)}</p>
-            <div className="mt-2 flex gap-1" aria-hidden="true">
-              {Array.from({ length: 5 }, (_, i) => (
-                <span
-                  key={i}
-                  className={i < filled ? "h-1 w-4 bg-primary" : "h-1 w-4 bg-border"}
-                />
+      {inMenu ? (
+        <main className="menu-layout">
+          <section className="menu-intro sheet-in">
+            <h1>赤岚</h1>
+            <h2>
+              <span />
+              夜奔屋脊
+              <span />
+            </h2>
+            <p className="intro-copy">穿过灯火，奔向天明。</p>
+            <button className="start-button" onClick={() => controller.current?.begin()}>
+              出发 <ChevronRight size={21} />
+            </button>
+            <p className="recent-score">
+              最高纪录 <strong>{number.format(hud.best)}</strong>
+            </p>
+          </section>
+          <section className="journey-panel sheet-in" aria-label="今夜行程">
+            <div className="panel-heading">
+              <h2>今夜行程</h2>
+              <span>{getCharacter(hud.character).title}</span>
+            </div>
+            <div className="journey-tabs" role="tablist" aria-label="行程设置">
+              {TABS.map((t) => (
+                <button
+                  key={t.id}
+                  id={`tab-${t.id}`}
+                  role="tab"
+                  aria-selected={tab === t.id}
+                  aria-controls={`panel-${t.id}`}
+                  onClick={() => setTab(t.id)}
+                >
+                  {t.name}
+                </button>
               ))}
             </div>
-          </div>
-
-          <div className="min-w-24 text-center">
-            {hud.combo > 0 ? (
-              <div key={hud.combo} className="combo-pop">
-                <p className="font-sans text-xs tracking-widest text-accent">连击</p>
-                <p className="font-display text-2xl leading-none text-accent md:text-3xl">
-                  {hud.combo}
-                  <span className="ml-1 text-lg">×{hud.mult}</span>
-                </p>
-              </div>
-            ) : (
-              <p className="font-sans text-xs text-muted">{hud.recording ? "新纪录" : "夜奔"}</p>
-            )}
-          </div>
-
-          <div className="flex items-start gap-2">
-            <div className="text-right">
-              <p className="font-sans text-xs tracking-widest text-muted">最高</p>
-              <p className="font-display text-2xl leading-none text-fg">{formatScore(hud.best)}</p>
-              <p className="mt-1 font-sans text-xs text-muted">{hud.distance} 米</p>
-            </div>
-            <button
-              type="button"
-              className="pointer-events-auto flex size-11 items-center justify-center border border-border bg-surface text-fg"
-              onClick={() => gameRef.current?.toggleMute()}
-              aria-label={hud.muted ? "打开声音" : "关闭声音"}
+            <div
+              className="tab-content"
+              id={`panel-${tab}`}
+              role="tabpanel"
+              aria-labelledby={`tab-${tab}`}
             >
-              {hud.muted ? <VolumeX className="size-5" /> : <Volume2 className="size-5" />}
-            </button>
-          </div>
-        </header>
-
-        <div className="flex flex-1 items-end justify-start md:items-center md:justify-end md:pr-12">
-          {hud.phase === "menu" ? <Menu best={hud.best} onStart={() => gameRef.current?.begin()} /> : null}
-          {hud.phase === "over" ? (
-            <GameOver hud={hud} onRestart={() => gameRef.current?.begin()} />
-          ) : null}
-          {hud.paused && hud.phase === "play" ? (
-            <PauseCard onResume={() => gameRef.current?.pressJump()} />
-          ) : null}
-        </div>
-
-        <footer className="dock pointer-events-none flex items-end justify-between gap-3 px-4 pt-3">
-          <p className="hidden pb-3 font-sans text-sm text-muted md:block">
-            空格跳跃 · ↓ 滑行 · Esc 暂停
-          </p>
-          {hud.phase === "play" && !hud.paused ? (
-            <div className="pointer-events-auto ml-auto flex gap-3">
-              <ControlButton
-                label="滑行"
-                icon={<ArrowDown className="size-5" />}
-                onDown={() => gameRef.current?.pressSlide()}
-                onUp={() => gameRef.current?.releaseSlide()}
-              />
-              <ControlButton
-                label="跳跃"
-                icon={<Play className="size-5" />}
-                primary
-                onDown={() => gameRef.current?.pressJump()}
-                onUp={() => gameRef.current?.releaseJump()}
-              />
+              {tab === "levels" ? (
+                <div className="level-list">
+                  {LEVELS.map((l, i) => (
+                    <button
+                      key={l.id}
+                      className={`level-row ${hud.level === l.id ? "selected" : ""}`}
+                      aria-pressed={hud.level === l.id}
+                      onClick={() => configure(l.id, hud.character)}
+                    >
+                      <span className={`level-art art-${l.id}`}>
+                        <span>0{i + 1}</span>
+                      </span>
+                      <span className="level-description">
+                        <strong>{l.name}</strong>
+                        <span>
+                          {l.target} 米 <i>{i === 0 ? "初行" : i === 1 ? "进阶" : "挑战"}</i>
+                        </span>
+                      </span>
+                      <span className="selection-mark">
+                        {hud.level === l.id ? <Check size={16} /> : <ChevronRight size={16} />}
+                      </span>
+                    </button>
+                  ))}
+                </div>
+              ) : null}
+              {tab === "characters" ? (
+                <div className="character-list">
+                  {CHARACTERS.map((c) => (
+                    <button
+                      key={c.id}
+                      className={`character-row ${hud.character === c.id ? "selected" : ""}`}
+                      aria-pressed={hud.character === c.id}
+                      onClick={() => configure(hud.level, c.id)}
+                    >
+                      <span className={`character-portrait portrait-${c.id}`} aria-hidden="true" />
+                      <span>
+                        <strong>
+                          {c.name}
+                          <small>{c.title}</small>
+                        </strong>
+                        <span>{c.description}</span>
+                      </span>
+                      {hud.character === c.id ? <Check size={17} /> : null}
+                    </button>
+                  ))}
+                </div>
+              ) : null}
+              {tab === "leaderboard" ? (
+                <Leaderboard
+                  records={hud.records}
+                  level={hud.level}
+                  onLevel={(id) => configure(id, hud.character)}
+                />
+              ) : null}
             </div>
-          ) : (
-            <span />
-          )}
-        </footer>
-      </div>
+            {tab === "leaderboard" ? (
+              <label className="player-name">
+                上榜名号
+                <input
+                  aria-label="上榜名号"
+                  maxLength={12}
+                  value={name}
+                  onChange={(e) => {
+                    setName(e.target.value);
+                    writeSave({ name: e.target.value });
+                  }}
+                  onBlur={() => setName(loadSave().name)}
+                />
+              </label>
+            ) : (
+              <div className="power-legend">
+                <span title="抵挡一次碰撞或坠落">
+                  <Shield />
+                  护盾
+                </span>
+                <span title="自动吸取附近铜钱，持续 8 秒">
+                  <Magnet />
+                  磁吸
+                </span>
+                <span title="所有局内得分翻倍，持续 8 秒">
+                  <Sparkles />
+                  双倍
+                </span>
+              </div>
+            )}
+            <p className="panel-caption">
+              {tab === "characters"
+                ? `已选 ${character.name} · ${level.name}`
+                : tab === "leaderboard"
+                  ? "成绩仅保存在此浏览器，不与其他设备同步。"
+                  : "拾取途中道具，助你穿越长夜。"}
+            </p>
+          </section>
+        </main>
+      ) : null}
+
+      {playing ? (
+        <>
+          <section className="run-progress" aria-label="关卡进度">
+            <div>
+              <span>
+                <Flag size={13} />
+                {level.name}
+              </span>
+              <span>
+                {hud.distance} / {level.target} 米
+              </span>
+            </div>
+            <progress max={level.target} value={hud.distance} />
+          </section>
+          <div className="run-effects" aria-live="polite">
+            {hud.shield > 0 ? (
+              <span className="effect shield">
+                <Shield size={15} />
+                护盾 ×1
+              </span>
+            ) : null}
+            {hud.magnet > 0 ? (
+              <span className="effect magnet">
+                <Magnet size={15} />
+                磁吸 {Math.ceil(hud.magnet)}s
+              </span>
+            ) : null}
+            {hud.double > 0 ? (
+              <span className="effect double">
+                <Sparkles size={15} />
+                双倍 {Math.ceil(hud.double)}s
+              </span>
+            ) : null}
+          </div>
+          {hud.combo > 1 ? (
+            <div className="combo-meter" key={hud.mult}>
+              <strong>{hud.combo}</strong> 连击 <span>×{hud.mult}</span>
+            </div>
+          ) : null}
+          {hud.paused ? (
+            <div className="modal-backdrop">
+              <section className="result-panel sheet-in" aria-label="已暂停">
+                <span className="result-symbol">
+                  <Pause />
+                </span>
+                <h2>歇一歇，再出发</h2>
+                <p>风还在等你，今夜的旅程尚未结束。</p>
+                <button className="start-button" onClick={() => controller.current?.togglePause()}>
+                  <Play size={18} />
+                  继续夜奔
+                </button>
+                <button className="text-button" onClick={() => controller.current?.menu()}>
+                  返回行程
+                </button>
+              </section>
+            </div>
+          ) : null}
+        </>
+      ) : null}
+      {hud.phase === "over" ? (
+        <div className="modal-backdrop">
+          <section className="result-panel sheet-in" aria-label="本局结算">
+            <span className="result-symbol">{hud.cleared ? <Flag /> : <RotateCcw />}</span>
+            <h2>{hud.cleared ? "此程已过，天光在前" : hud.newBest ? "长夜新纪录" : "夜色未尽"}</h2>
+            <p>
+              {hud.cleared
+                ? `${level.name} · 通关奖励 +${500 + level.target * 2}`
+                : "每一次出发，都比上一次更远。"}
+            </p>
+            <strong className="result-score">{number.format(hud.score)}</strong>
+            <span className="result-score-label">本局得分 · 已记入本机排行</span>
+            <dl className="result-stats">
+              <div>
+                <dt>距离</dt>
+                <dd>
+                  {hud.distance}
+                  <small> 米</small>
+                </dd>
+              </div>
+              <div>
+                <dt>铜钱</dt>
+                <dd>{hud.coins}</dd>
+              </div>
+              <div>
+                <dt>最高连击</dt>
+                <dd>{hud.maxCombo}</dd>
+              </div>
+            </dl>
+            <button
+              className="start-button"
+              onClick={() => {
+                if (hud.cleared) {
+                  const next =
+                    LEVELS[(LEVELS.findIndex((l) => l.id === hud.level) + 1) % LEVELS.length]!;
+                  configure(next.id, hud.character);
+                }
+                controller.current?.begin();
+              }}
+            >
+              {hud.cleared ? "奔赴下一程" : "再跑一次"}
+              <ChevronRight size={18} />
+            </button>
+            <button
+              className="text-button"
+              onClick={() => {
+                controller.current?.menu();
+                setTab("leaderboard");
+              }}
+            >
+              查看排行与行程
+            </button>
+          </section>
+        </div>
+      ) : null}
+      <footer className={`game-footer ${playing ? "in-play" : ""}`}>
+        <p className="keyboard-hints">
+          <kbd>空格</kbd> 跳跃 <span>/</span> <kbd>↓</kbd> 滑行 <span>/</span> <kbd>Esc</kbd> 暂停
+        </p>
+        <p className="touch-hint">轻点跳跃 · 下滑滑行 · 长按跳得更高</p>
+        {playing && !hud.paused ? (
+          <div className="touch-controls">
+            <ControlButton
+              label="滑行"
+              icon={<ArrowDown />}
+              onDown={() => controller.current?.pressSlide()}
+              onUp={() => controller.current?.releaseSlide()}
+            />
+            <ControlButton
+              label="跳跃"
+              primary
+              icon={<ArrowUp />}
+              onDown={() => controller.current?.pressJump()}
+              onUp={() => controller.current?.releaseJump()}
+            />
+          </div>
+        ) : null}
+      </footer>
     </div>
   );
 }
 
-function Menu({ best, onStart }: { best: number; onStart: () => void }) {
+function Leaderboard({
+  records,
+  level,
+  onLevel,
+}: {
+  records: RunRecord[];
+  level: LevelId;
+  onLevel: (id: LevelId) => void;
+}) {
+  const rows = records
+    .filter((r) => r.level === level)
+    .sort((a, b) => b.score - a.score || b.distance - a.distance)
+    .slice(0, 5);
   return (
-    <section className="panel sheet-in pointer-events-auto mx-4 mb-3 w-full max-w-md p-5 backdrop-blur-md md:mx-0 md:mb-0 md:p-6">
-      <div className="mb-4 flex items-center gap-3">
-        <span className="flex size-12 items-center justify-center bg-primary font-display text-xl text-fg">
-          奔
-        </span>
-        <div>
-          <h1 className="font-display text-5xl leading-none text-fg">赤岚</h1>
-          <p className="mt-1 font-sans text-sm tracking-widest text-accent">夜奔屋脊</p>
-        </div>
+    <div className="leaderboard">
+      <div className="board-heading">
+        <span>本机排行</span>
+        <select
+          aria-label="排行榜关卡"
+          value={level}
+          onChange={(e) => onLevel(e.target.value as LevelId)}
+        >
+          {LEVELS.map((l) => (
+            <option key={l.id} value={l.id}>
+              {l.name}
+            </option>
+          ))}
+        </select>
       </div>
-      <p className="max-w-sm font-sans text-base leading-relaxed text-muted">
-        跳过箱笼，滑过横幡，跃过断瓦。跑得越远，夜风越急，障碍越密。
-      </p>
-      <p className="mt-4 font-sans text-sm text-muted">
-        最高纪录 <span className="font-display text-xl text-fg">{formatScore(best)}</span>
-      </p>
-      <button
-        type="button"
-        className="mt-5 flex h-12 w-full items-center justify-center gap-2 bg-primary font-sans text-base text-fg"
-        onClick={onStart}
-      >
-        <Play className="size-5" />
-        出发
-      </button>
-      <p className="mt-3 font-sans text-xs leading-relaxed text-muted">
-        点击或空格跳跃，向下滑或按 ↓ 滑行。擦肩而过会叠连击。
-      </p>
-    </section>
+      {rows.length ? (
+        <ol>
+          {rows.map((r, i) => (
+            <li key={r.id}>
+              <span className={`rank rank-${i}`}>{String(i + 1).padStart(2, "0")}</span>
+              <span className="rank-player">
+                <strong>{r.name}</strong>
+                <small>
+                  {getCharacter(r.character).name} · {r.distance} 米{r.cleared ? " · 通关" : ""}
+                </small>
+              </span>
+              <strong className="rank-score">{number.format(r.score)}</strong>
+            </li>
+          ))}
+        </ol>
+      ) : (
+        <div className="empty-board">
+          <Trophy />
+          <strong>今夜，等你留名</strong>
+          <p>完成一局，写下你的第一条纪录。</p>
+        </div>
+      )}
+    </div>
   );
 }
-
-function GameOver({ hud, onRestart }: { hud: Hud; onRestart: () => void }) {
-  return (
-    <section className="panel sheet-in pointer-events-auto mx-4 mb-3 w-full max-w-md p-5 backdrop-blur-md md:mx-0 md:mb-0 md:p-6">
-      <p className="font-sans text-xs tracking-widest text-primary">失足</p>
-      <h2 className="mt-1 font-display text-4xl leading-none text-fg">
-        {hud.newBest ? "新纪录" : "夜色未尽"}
-      </h2>
-      <p className="mt-4 font-display text-6xl leading-none text-accent">{formatScore(hud.score)}</p>
-      <dl className="mt-5 grid grid-cols-3 gap-3 border-t border-border pt-4 font-sans">
-        <div>
-          <dt className="text-xs text-muted">距离</dt>
-          <dd className="mt-1 text-lg text-fg">{hud.distance} 米</dd>
-        </div>
-        <div>
-          <dt className="text-xs text-muted">最高连击</dt>
-          <dd className="mt-1 text-lg text-fg">{hud.maxCombo}</dd>
-        </div>
-        <div>
-          <dt className="text-xs text-muted">纪录</dt>
-          <dd className="mt-1 text-lg text-fg">{formatScore(hud.best)}</dd>
-        </div>
-      </dl>
-      <button
-        type="button"
-        className="mt-5 flex h-12 w-full items-center justify-center gap-2 bg-primary font-sans text-base text-fg"
-        onClick={onRestart}
-      >
-        <RotateCcw className="size-5" />
-        再跑一次
-      </button>
-    </section>
-  );
-}
-
-function PauseCard({ onResume }: { onResume: () => void }) {
-  return (
-    <section className="panel sheet-in pointer-events-auto mx-auto mb-8 w-fit px-6 py-5 text-center backdrop-blur-md">
-      <h2 className="font-display text-3xl text-fg">已暂停</h2>
-      <button
-        type="button"
-        className="mt-4 flex h-12 items-center justify-center bg-primary px-6 font-sans text-fg"
-        onClick={onResume}
-      >
-        继续
-      </button>
-    </section>
-  );
-}
-
 function ControlButton({
   label,
   icon,
@@ -227,26 +473,34 @@ function ControlButton({
   return (
     <button
       type="button"
-      className={
-        primary
-          ? "flex h-14 min-w-28 items-center justify-center gap-2 bg-primary px-4 font-sans text-base text-fg"
-          : "flex h-14 min-w-28 items-center justify-center gap-2 border border-border bg-surface px-4 font-sans text-base text-fg"
-      }
-      onPointerDown={(event) => {
-        event.preventDefault();
-        event.stopPropagation();
+      className={`touch-control ${primary ? "primary" : ""}`}
+      aria-label={label}
+      onPointerDown={(e) => {
+        e.preventDefault();
+        e.currentTarget.setPointerCapture(e.pointerId);
         onDown();
       }}
-      onPointerUp={(event) => {
-        event.preventDefault();
+      onPointerUp={(e) => {
+        e.preventDefault();
         onUp();
       }}
       onPointerCancel={onUp}
-      onPointerLeave={onUp}
-      aria-label={label}
+      onLostPointerCapture={onUp}
+      onKeyDown={(e) => {
+        if ((e.key === "Enter" || e.key === " ") && !e.repeat) {
+          e.preventDefault();
+          onDown();
+        }
+      }}
+      onKeyUp={(e) => {
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          onUp();
+        }
+      }}
     >
       {icon}
-      {label}
+      <span>{label}</span>
     </button>
   );
 }

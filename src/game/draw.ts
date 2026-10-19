@@ -1,7 +1,31 @@
+import { getLevel, getCharacter } from "./content";
+import { isPower } from "./sim";
 import type { RunState } from "./sim";
 
-const SKY_TOP = "#121722";
-const SKY_HORIZON = "#3c261f";
+let town: HTMLImageElement | null = null;
+let dawn: HTMLImageElement | null = null;
+let runners: HTMLImageElement | null = null;
+function runnerArt() {
+  if (!runners && typeof Image !== "undefined") {
+    runners = new Image();
+    runners.src = "/art/run-cycle.png";
+  }
+  return runners?.complete && runners.naturalWidth > 0 ? runners : null;
+}
+function townArt(level: string) {
+  if (level === "dawn") {
+    if (!dawn && typeof Image !== "undefined") {
+      dawn = new Image();
+      dawn.src = "/art/dawn-town.png";
+    }
+    return dawn?.complete && dawn.naturalWidth > 0 ? dawn : null;
+  }
+  if (!town && typeof Image !== "undefined") {
+    town = new Image();
+    town.src = "/art/night-town.png";
+  }
+  return town?.complete && town.naturalWidth > 0 ? town : null;
+}
 const PAPER = "#f4efe4";
 const INK = "#1a120e";
 const CINNABAR = "#e4572e";
@@ -46,23 +70,47 @@ export function drawFrame(ctx: CanvasRenderingContext2D, state: RunState, reduce
   ctx.translate(ox, oy);
 
   const sky = ctx.createLinearGradient(0, 0, 0, ground);
-  sky.addColorStop(0, SKY_TOP);
+  sky.addColorStop(0, getLevel(state.level).sky);
   sky.addColorStop(0.72, "#241c22");
-  sky.addColorStop(1, SKY_HORIZON);
+  sky.addColorStop(1, getLevel(state.level).horizon);
   ctx.fillStyle = sky;
   ctx.fillRect(-20, -40, w + 40, ground + 40);
 
-  drawMoon(ctx, w, h);
-  drawStars(ctx, w, ground);
-  drawSkyline(ctx, state, 0.12, "#1a2430", 150, 40);
-  drawSkyline(ctx, state, 0.28, "#243240", 116, 18);
-  drawMidRoofs(ctx, state);
-  drawStreet(ctx, state);
-  drawGround(ctx, state);
-  drawGaps(ctx, state);
-  drawObstacles(ctx, state);
+  const art = townArt(state.level);
+  if (art) {
+    const scale = Math.max(w / art.naturalWidth, h / art.naturalHeight);
+    const aw = art.naturalWidth * scale,
+      ah = art.naturalHeight * scale;
+    ctx.save();
+    if (state.level !== "dawn") {
+      ctx.translate(w, 0);
+      ctx.scale(-1, 1);
+    }
+    ctx.drawImage(art, (w - aw) / 2, (h - ah) / 2, aw, ah);
+    ctx.restore();
+    if (state.level === "rain") {
+      ctx.fillStyle = "rgba(18,54,76,.38)";
+      ctx.fillRect(0, 0, w, h);
+    }
+  } else {
+    drawMoon(ctx, w, h);
+    drawStars(ctx, w, ground);
+    drawSkyline(ctx, state, 0.12, "#1a2430", 150, 40);
+    drawSkyline(ctx, state, 0.28, "#243240", 116, 18);
+    drawMidRoofs(ctx, state);
+  }
+  if (state.level === "rain") drawRain(ctx, state, reduced);
+  if (state.phase !== "menu") {
+    drawStreet(ctx, state);
+    drawGround(ctx, state);
+    drawGaps(ctx, state);
+    drawObstacles(ctx, state);
+  }
   drawParticles(ctx, state, "back");
-  drawPlayer(ctx, state);
+  ctx.save();
+  if (state.phase === "menu") ctx.translate(w * 0.035, h * 0.13);
+  drawPlayer(ctx, state, reduced);
+  ctx.restore();
   drawParticles(ctx, state, "front");
   drawSpeedLines(ctx, state, reduced);
   drawFloaters(ctx, state);
@@ -123,7 +171,7 @@ function drawSkyline(
   const start = Math.floor(scroll / tile) - 1;
   ctx.fillStyle = color;
   for (let i = start; i < start + 10; i++) {
-    const x = i * tile - (scroll % tile);
+    const x = i * tile - scroll;
     const n = hash(i + cell);
     const bh = height * (0.45 + n * 0.7);
     const bw = 46 + hash(i + 2 + cell) * 70;
@@ -146,7 +194,7 @@ function drawMidRoofs(ctx: CanvasRenderingContext2D, state: RunState) {
   const scroll = state.scroll * 0.48;
   const start = Math.floor(scroll / tile) - 1;
   for (let i = start; i < start + 14; i++) {
-    const x = i * tile - (scroll % tile);
+    const x = i * tile - scroll;
     const n = hash(i + 20);
     const rh = 36 + n * 28;
     ctx.fillStyle = "#2c3844";
@@ -180,7 +228,8 @@ function drawStreet(ctx: CanvasRenderingContext2D, state: RunState) {
 }
 
 function drawGround(ctx: CanvasRenderingContext2D, state: RunState) {
-  const ground = state.ground;
+  // The ridge is drawn 20px above its origin; align its top with the physics floor.
+  const ground = state.ground + 20;
   const tile = 48;
   const scroll = state.scroll;
   const start = Math.floor(scroll / tile) - 2;
@@ -190,7 +239,7 @@ function drawGround(ctx: CanvasRenderingContext2D, state: RunState) {
   ctx.fillRect(-40, ground + 8, state.viewW + 80, 22);
 
   for (let i = start; i < start + cols; i++) {
-    const x = i * tile - (scroll % tile);
+    const x = i * tile - scroll;
     if (gapAt(state, x + tile / 2)) continue;
     ctx.fillStyle = ROOF;
     ctx.fillRect(x, ground - 16, tile + 1, 26);
@@ -225,7 +274,7 @@ function drawGaps(ctx: CanvasRenderingContext2D, state: RunState) {
   for (const e of state.entities) {
     if (!e.active || e.kind !== "gap") continue;
     const { x, w } = e;
-    const ground = state.ground;
+    const ground = state.ground + 20;
     ctx.fillStyle = "#070605";
     ctx.fillRect(x, ground - 18, w, state.viewH - ground + 30);
     const glow = ctx.createLinearGradient(0, ground, 0, ground + 80);
@@ -256,9 +305,17 @@ function drawGaps(ctx: CanvasRenderingContext2D, state: RunState) {
 function drawObstacles(ctx: CanvasRenderingContext2D, state: RunState) {
   for (const e of state.entities) {
     if (!e.active) continue;
-    if (e.kind === "crate" || e.kind === "tall") drawCrate(ctx, e.x, e.y, e.w, e.h, e.kind === "tall");
+    if (e.kind === "crate" || e.kind === "tall")
+      drawCrate(ctx, e.x, e.y, e.w, e.h, e.kind === "tall");
     else if (e.kind === "banner") drawBanner(ctx, e.x, e.y, e.w, e.h, state.time + e.phase);
-    else if (e.kind === "coin") drawCoin(ctx, e.x + e.w / 2, e.y + e.h / 2 + Math.sin(state.time * 5 + e.phase) * 4, state.time + e.phase);
+    else if (isPower(e.kind)) drawPower(ctx, e.x + e.w / 2, e.y + e.h / 2, e.kind, state.time);
+    else if (e.kind === "coin")
+      drawCoin(
+        ctx,
+        e.x + e.w / 2,
+        e.y + e.h / 2 + Math.sin(state.time * 5 + e.phase) * 4,
+        state.time + e.phase,
+      );
   }
 }
 
@@ -363,7 +420,7 @@ function drawCoin(ctx: CanvasRenderingContext2D, x: number, y: number, t: number
   ctx.restore();
 }
 
-function drawPlayer(ctx: CanvasRenderingContext2D, state: RunState) {
+function drawPlayer(ctx: CanvasRenderingContext2D, state: RunState, reduced: boolean) {
   const p = state.player;
   const sliding = p.sliding;
   const airborne = !p.onGround;
@@ -371,25 +428,69 @@ function drawPlayer(ctx: CanvasRenderingContext2D, state: RunState) {
   const swing = sliding || airborne || dead ? 0 : Math.sin(p.runPhase);
 
   ctx.save();
-  drawScarf(ctx, p.scarf);
-  ctx.translate(p.x, p.y + (dead ? 0 : Math.abs(Math.cos(p.runPhase)) * -2));
+  const character = getCharacter(state.character);
+  if (state.invincible > 0) ctx.globalAlpha = Math.sin(state.time * 32) > 0 ? 0.4 : 1;
+  if (state.shield > 0 || state.magnet > 0 || state.invincible > 0) {
+    ctx.save();
+    ctx.strokeStyle = state.shield > 0 || state.invincible > 0 ? "#8ddcf2" : "#f59b7b";
+    ctx.globalAlpha = 0.5 + Math.sin(state.time * 4) * 0.15;
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.ellipse(p.x + 2, p.y - 40, state.magnet > 0 ? 62 : 43, 58, 0, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.restore();
+  }
+  const sprite = runnerArt();
+  if (!sprite) drawScarf(ctx, p.scarf, character.color);
+  ctx.translate(p.x, p.y + (dead || reduced ? 0 : Math.abs(Math.cos(p.runPhase)) * -2));
 
   const lift = airborne ? clampLift(p.vy) : 0;
   if (!dead && !sliding) ctx.scale(p.squashX, p.squashY);
-  if (sliding) ctx.rotate(-1.02);
+  if (sliding) {
+    ctx.translate(0, -13);
+    ctx.rotate(1.02);
+    ctx.scale(0.8, 0.65);
+  }
   if (dead) ctx.rotate(Math.min(1.4, p.tumble));
 
   ctx.fillStyle = "rgba(0,0,0,0.28)";
   ctx.beginPath();
-  ctx.ellipse(4, state.ground - p.y, sliding ? 30 : 18 + Math.max(0, 16 - (state.ground - p.y) * 0.08), 5, 0, 0, Math.PI * 2);
+  ctx.ellipse(
+    4,
+    state.ground - p.y,
+    sliding ? 30 : 18 + Math.max(0, 16 - (state.ground - p.y) * 0.08),
+    5,
+    0,
+    0,
+    Math.PI * 2,
+  );
   ctx.fill();
+
+  if (sprite) {
+    const index = state.character === "qingyu" ? 1 : state.character === "jinmo" ? 2 : 0;
+    const cellW = sprite.naturalWidth / 4;
+    const cellH = sprite.naturalHeight / 3;
+    const frame = dead
+      ? 2
+      : airborne || sliding
+        ? 1
+        : reduced
+          ? 0
+          : Math.floor(p.runPhase * 0.9) % 4;
+    const bounce = !airborne && !sliding && !dead && !reduced ? Math.sin(p.runPhase * 2) * 0.02 : 0;
+    ctx.scale(1 - bounce * 0.4, 1 + bounce);
+    if (airborne && !dead && !sliding) ctx.rotate(Math.max(-0.12, Math.min(0.12, p.vy * 0.00015)));
+    ctx.drawImage(sprite, frame * cellW, index * cellH, cellW, cellH, -65, -92, 98, 98);
+    ctx.restore();
+    return;
+  }
 
   const hip = sliding ? -16 : -34;
   const kneeBend = airborne ? 0.9 : 0.45;
   drawLeg(ctx, -2, hip, swing * 0.7, kneeBend, true);
   drawLeg(ctx, 4, hip, -swing * 0.75, kneeBend, false);
 
-  ctx.fillStyle = PAPER;
+  ctx.fillStyle = character.outfit;
   ctx.beginPath();
   ctx.moveTo(-14, hip + 2);
   ctx.lineTo(-18, -60);
@@ -399,13 +500,13 @@ function drawPlayer(ctx: CanvasRenderingContext2D, state: RunState) {
   ctx.closePath();
   ctx.fill();
 
-  ctx.fillStyle = CINNABAR;
+  ctx.fillStyle = character.color;
   ctx.fillRect(-6, -52, 14, 5);
   ctx.fillStyle = GOLD;
   ctx.fillRect(-2, -44, 6, 8);
 
   const arm = airborne ? -0.8 : -swing * 0.8;
-  ctx.strokeStyle = PAPER;
+  ctx.strokeStyle = character.outfit;
   ctx.lineWidth = 7;
   ctx.lineCap = "round";
   ctx.beginPath();
@@ -428,7 +529,7 @@ function drawPlayer(ctx: CanvasRenderingContext2D, state: RunState) {
   ctx.arc(1, -80 + lift, 13, Math.PI, Math.PI * 2);
   ctx.fill();
   ctx.fillRect(-10, -80 + lift, 22, 8);
-  ctx.fillStyle = CINNABAR;
+  ctx.fillStyle = character.color;
   ctx.fillRect(8, -78 + lift, 12, 3);
 
   ctx.fillStyle = INK;
@@ -466,9 +567,13 @@ function drawLeg(
   ctx.fill();
 }
 
-function drawScarf(ctx: CanvasRenderingContext2D, scarf: { x: number; y: number }[]) {
+function drawScarf(
+  ctx: CanvasRenderingContext2D,
+  scarf: { x: number; y: number }[],
+  color: string,
+) {
   if (scarf.length === 0) return;
-  ctx.strokeStyle = CINNABAR;
+  ctx.strokeStyle = color;
   ctx.lineWidth = 5;
   ctx.lineCap = "round";
   ctx.lineJoin = "round";
@@ -505,7 +610,9 @@ function drawSpeedLines(ctx: CanvasRenderingContext2D, state: RunState, reduced:
   for (let i = 0; i < n; i++) {
     const y = hash(i + 4) * (state.ground - 40) + 20;
     const span = 30 + hash(i + 8) * 70;
-    const x = ((hash(i + 2) * state.viewW + state.scroll * (1.4 + state.speedT)) % (state.viewW + 120)) - 40;
+    const x =
+      ((hash(i + 2) * state.viewW + state.scroll * (1.4 + state.speedT)) % (state.viewW + 120)) -
+      40;
     ctx.beginPath();
     ctx.moveTo(x, y);
     ctx.lineTo(x - span, y);
@@ -523,4 +630,66 @@ function drawFloaters(ctx: CanvasRenderingContext2D, state: RunState) {
     ctx.fillText(f.text, f.x, f.y);
   }
   ctx.globalAlpha = 1;
+}
+
+function drawPower(
+  ctx: CanvasRenderingContext2D,
+  x: number,
+  y: number,
+  kind: "shield" | "magnet" | "double",
+  time: number,
+) {
+  ctx.save();
+  ctx.translate(x, y + Math.sin(time * 4) * 4);
+  const color = kind === "shield" ? "#8ddcf2" : kind === "magnet" ? "#f79674" : "#f3ce77";
+  ctx.shadowColor = color;
+  ctx.shadowBlur = 14;
+  ctx.fillStyle = "#14242f";
+  ctx.strokeStyle = color;
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  ctx.arc(0, 0, 17, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.stroke();
+  ctx.shadowBlur = 0;
+  if (kind === "shield") {
+    ctx.beginPath();
+    ctx.moveTo(-7, -8);
+    ctx.lineTo(7, -8);
+    ctx.lineTo(6, 3);
+    ctx.lineTo(0, 9);
+    ctx.lineTo(-6, 3);
+    ctx.closePath();
+    ctx.stroke();
+  } else if (kind === "magnet") {
+    ctx.beginPath();
+    ctx.moveTo(-6, -7);
+    ctx.lineTo(-6, 2);
+    ctx.arc(0, 2, 6, Math.PI, 0, true);
+    ctx.lineTo(6, -7);
+    ctx.stroke();
+  } else {
+    ctx.fillStyle = color;
+    ctx.font = "bold 15px sans-serif";
+    ctx.textAlign = "center";
+    ctx.fillText("×2", 0, 5);
+  }
+  ctx.restore();
+}
+function drawRain(ctx: CanvasRenderingContext2D, state: RunState, reduced: boolean) {
+  if (reduced) return;
+  ctx.save();
+  ctx.strokeStyle = "rgba(173,213,231,.23)";
+  ctx.lineWidth = 1;
+  for (let i = 0; i < 65; i++) {
+    const x =
+      (hash(i + 100) * state.viewW - ((state.time * 130) % state.viewW) + state.viewW) %
+      state.viewW;
+    const y = (hash(i + 200) * state.viewH + state.time * 500) % state.viewH;
+    ctx.beginPath();
+    ctx.moveTo(x, y);
+    ctx.lineTo(x - 8, y + 22);
+    ctx.stroke();
+  }
+  ctx.restore();
 }

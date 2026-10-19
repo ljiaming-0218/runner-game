@@ -17,6 +17,7 @@ export class Sfx {
 
   unlock() {
     const Ctx = window.AudioContext;
+    if (!Ctx) return;
     if (!this.ctx) {
       this.ctx = new Ctx({ latencyHint: "interactive" });
       this.master = this.ctx.createGain();
@@ -67,6 +68,25 @@ export class Sfx {
     this.tone({ type: "sine", freq: 520, to: 680, dur: 0.08, gain: 0.06 });
   }
 
+  power() {
+    [523, 659, 784].forEach((freq, i) =>
+      setTimeout(() => this.tone({ type: "sine", freq, dur: 0.18, gain: 0.07 }), i * 65),
+    );
+  }
+  shield() {
+    this.tone({ type: "triangle", freq: 820, to: 180, dur: 0.32, gain: 0.09 });
+  }
+  clear() {
+    [523, 659, 784, 1047].forEach((freq, i) =>
+      setTimeout(() => this.tone({ type: "triangle", freq, dur: 0.32, gain: 0.08 }), i * 120),
+    );
+  }
+  destroy() {
+    if (this.ctx) void this.ctx.close();
+    this.ctx = null;
+    this.master = null;
+  }
+
   music(dt: number, rate: number, active: boolean) {
     if (!this.ctx || this.muted || !active) {
       this.nextBeat = 0;
@@ -76,9 +96,10 @@ export class Sfx {
     const interval = Math.max(0.26, 0.5 - rate * 0.22);
     if (this.nextBeat > 0) return;
     this.nextBeat += interval;
-    const scale = [220, 262, 294, 330, 392, 330, 294, 262];
+    const scale = [220, 247, 294, 330, 440, 330, 294, 247];
     const f = scale[this.step % scale.length]!;
     this.step += 1;
+    if (this.step % 4 === 0) this.tone({ type: "triangle", freq: f / 2, dur: 0.34, gain: 0.028 });
     this.tone({
       type: this.step % 4 === 0 ? "triangle" : "sine",
       freq: f,
@@ -107,11 +128,17 @@ export class Sfx {
       const filter = this.ctx.createBiquadFilter();
       filter.type = "lowpass";
       filter.frequency.setValueAtTime(spec.freq, t);
-      if (spec.to) filter.frequency.exponentialRampToValueAtTime(Math.max(40, spec.to), t + spec.dur);
+      if (spec.to)
+        filter.frequency.exponentialRampToValueAtTime(Math.max(40, spec.to), t + spec.dur);
       src.connect(filter);
       filter.connect(gain);
       src.start(t);
       src.stop(t + spec.dur + 0.02);
+      src.onended = () => {
+        src.disconnect();
+        filter.disconnect();
+        gain.disconnect();
+      };
       return;
     }
 
@@ -122,5 +149,9 @@ export class Sfx {
     osc.connect(gain);
     osc.start(t);
     osc.stop(t + spec.dur + 0.02);
+    osc.onended = () => {
+      osc.disconnect();
+      gain.disconnect();
+    };
   }
 }
